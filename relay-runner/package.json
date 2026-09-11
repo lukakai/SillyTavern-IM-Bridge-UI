@@ -1,0 +1,10 @@
+{
+  "name": "st-im-bridge-web-relay-runner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runs the SillyTavern IM Bridge UI relay in a dedicated system Chrome profile.",
+  "dependencies": {
+    "playwright-core": "^1.63.0"
+  }
+}

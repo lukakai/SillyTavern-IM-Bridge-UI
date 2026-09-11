@@ -34,6 +34,25 @@ SillyTavern UI 扩展，作为 [SillyTavern-IM-Bridge](https://github.com/lukaka
 
 中继只访问同源 `/api/plugins/st-im-bridge/web-relay/*` 路由，复用 SillyTavern 登录态与 CSRF Token，不保存 Telegram Token、Basic Auth 密码或模型密钥。
 
+### Mac mini 无头运行
+
+仓库的 `relay-runner/` 使用系统已安装的 Google Chrome，不会另外下载 Chromium。Basic Auth 密码优先从 macOS 钥匙串读取：
+
+```sh
+cd relay-runner
+cp config.example.json config.json
+nano config.json
+npm install --omit=dev
+security add-generic-password -U \
+  -a '你的 Basic Auth 用户名' \
+  -s 'SillyTavern IM Bridge Basic Auth' \
+  -T /usr/bin/security \
+  -w
+node runner.mjs config.json
+```
+
+`security` 会安全提示输入密码，不必把密码写入命令历史或 `config.json`。运行器启动独立 Chrome profile，并在页面加载前启用中继。若酒馆还启用了用户账号登录，把 `headless` 暂时改为 `false`，在可见窗口完成一次登录后再切回 `true`。
+
 ## 探测与降级
 
 展开「IM Bridge」抽屉时，扩展会先 `GET /api/plugins/st-im-bridge/probe`：

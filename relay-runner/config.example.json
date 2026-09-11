@@ -1,0 +1,9 @@
+{
+  "url": "http://UNRAID-IP:8567/",
+  "basicAuthUsername": "YOUR_BASIC_AUTH_USERNAME",
+  "keychainService": "SillyTavern IM Bridge Basic Auth",
+  "headless": true,
+  "profileDir": "~/Library/Application Support/SillyTavern-IM-Bridge",
+  "chromeExecutable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "ignoreHTTPSErrors": false
+}
