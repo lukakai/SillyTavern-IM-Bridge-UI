@@ -1,6 +1,6 @@
 # SillyTavern-IM-Bridge-UI
 
-SillyTavern UI 扩展，作为 [SillyTavern-IM-Bridge](https://github.com/rinmashiro0529/SillyTavern-IM-Bridge) server plugin 的前端控制面板。
+SillyTavern UI 扩展，作为 [SillyTavern-IM-Bridge](https://github.com/lukakai/SillyTavern-IM-Bridge) server plugin 的前端控制面板和网页完整模式执行器。
 
 > 完整项目交接文档：server plugin 仓库根目录的 `PROJECT_HANDOVER.md`
 
@@ -9,7 +9,7 @@ SillyTavern UI 扩展，作为 [SillyTavern-IM-Bridge](https://github.com/rinmas
 1. 先按 server plugin 仓库 README 安装并启用 `st-im-bridge`。
 2. 在 SillyTavern 网页中：Extensions → **Install Extension** → 粘贴：
    ```
-   https://github.com/rinmashiro0529/SillyTavern-IM-Bridge-UI.git
+   https://github.com/lukakai/SillyTavern-IM-Bridge-UI.git
    ```
 3. 刷新 ST 网页 → 在「Extensions」抽屉中找到「IM Bridge」并展开。
 
@@ -21,6 +21,18 @@ SillyTavern UI 扩展，作为 [SillyTavern-IM-Bridge](https://github.com/rinmas
 - **TG 绑定**：网页内点「生成绑定码」获取 6 位短码（5 分钟内 mm:ss 倒计时），用户在 Telegram 私聊 bot 发送 `/bind <code>` 即可把自己的 numeric ID 加入白名单。已绑定列表中每个用户带「解绑」按钮。
 - **压缩配置**：调整 keepRecent / batchSize / timeoutMs / retryCount / retryDelayMs。
 - **管理员视图**（admin 用户可见）：跨账号查看与启停他人 bot。
+- **网页完整模式中继**：在当前浏览器中显式启用后，领取 Telegram 生成任务，切换到指定角色/会话并调用 SillyTavern 原生 `Generate()`。世界书、预设、Persona、Regex 和生成拦截器等均由网页前端按正常流程运行。
+
+## 网页完整模式
+
+1. server plugin 和本 UI 扩展都更新到支持 `/prompt web` 的版本。
+2. 使用一个专用 Chromium/Chrome profile 打开并登录 SillyTavern。
+3. Extensions → IM Bridge →「网页完整模式中继」→「在此浏览器启用网页中继」。
+4. Telegram 发送 `/prompt`，看到中继在线后发送 `/prompt web`。
+
+启用状态保存在这个浏览器 profile 的 `localStorage`，不会同步到其他浏览器。同一 profile 打开多个标签页时使用 Web Locks 只允许一个标签页执行任务。中继会自动切换当前角色和会话，所以不要在日常使用的浏览器配置中启用。首次配置应使用可见窗口完成登录；之后可以复用同一 profile 启动 headless Chromium。
+
+中继只访问同源 `/api/plugins/st-im-bridge/web-relay/*` 路由，复用 SillyTavern 登录态与 CSRF Token，不保存 Telegram Token、Basic Auth 密码或模型密钥。
 
 ## 探测与降级
 

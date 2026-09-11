@@ -1,6 +1,13 @@
 // SillyTavern-IM-Bridge UI extension
 // Loaded by SillyTavern's extension system; uses /api/plugins/st-im-bridge/* endpoints.
 
+import {
+  disableWebRelay,
+  enableWebRelay,
+  getWebRelayState,
+  subscribeWebRelay,
+} from "./web-relay.js";
+
 const PLUGIN_BASE = "/api/plugins/st-im-bridge";
 let csrfTokenCache = null;
 
@@ -140,8 +147,59 @@ function buildPersonalTab(account, onMutate) {
   root.appendChild(el("div", { class: "imb-row" }, el("label", {}, "运行状态"), statusBox, startBtn, stopBtn));
   root.appendChild(usernameBox);
   root.appendChild(buildBindSection(account, onMutate));
+  root.appendChild(buildWebRelaySection());
   root.appendChild(lastErrorBox);
   return root;
+}
+
+function buildWebRelaySection() {
+  const wrap = el("div", { class: "imb-section" });
+  const status = el("span", { class: "imb-status stopped" }, "未启用");
+  const detail = el("div", { class: "imb-bind-hint" }, "");
+  const toggle = el("button", { class: "menu_button" }, "在此浏览器启用网页中继");
+
+  const render = (relay) => {
+    const labelByPhase = {
+      disabled: "未启用",
+      waiting: "等待其他标签页",
+      connecting: "连接中",
+      online: "在线",
+      generating: "正在生成",
+      error: "连接异常",
+    };
+    status.textContent = labelByPhase[relay.phase] || relay.phase;
+    status.className = `imb-status ${relay.phase === "online" || relay.phase === "generating" ? "running" : relay.phase === "error" ? "error" : "stopped"}`;
+    toggle.textContent = relay.enabled ? "停用此浏览器的网页中继" : "在此浏览器启用网页中继";
+    detail.textContent = relay.lastError
+      ? `最近错误：${relay.lastError}`
+      : relay.enabled
+        ? "请把这个酒馆页面作为专用中继页面保持打开；Telegram 可用 /prompt web 切换。"
+        : "仅在专用的 Chromium 配置中启用，避免正常浏览酒馆时被中继自动切换角色/会话。";
+  };
+
+  toggle.onclick = () => {
+    const relay = getWebRelayState();
+    if (relay.enabled) {
+      disableWebRelay();
+      showToast("info", "已停用此浏览器的网页中继");
+    } else {
+      enableWebRelay();
+      showToast("success", "正在连接网页中继");
+    }
+  };
+  const unsubscribe = subscribeWebRelay(render);
+  const observer = new MutationObserver(() => {
+    if (!wrap.isConnected) {
+      unsubscribe();
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  wrap.appendChild(el("h3", {}, "网页完整模式中继"));
+  wrap.appendChild(el("div", { class: "imb-row" }, el("label", {}, "此浏览器"), status, toggle));
+  wrap.appendChild(detail);
+  return wrap;
 }
 
 function buildBindSection(account, onMutate) {

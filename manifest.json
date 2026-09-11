@@ -6,7 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Rin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "auto_update": true,
-  "homePage": "https://github.com/rinmashiro0529/SillyTavern-IM-Bridge-UI"
+  "homePage": "https://github.com/lukakai/SillyTavern-IM-Bridge-UI"
 }
