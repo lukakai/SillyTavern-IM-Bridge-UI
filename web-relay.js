@@ -8,7 +8,7 @@ const ENABLED_KEY = "st-im-bridge.web-relay.enabled";
 const WORKER_KEY = "st-im-bridge.web-relay.worker-id";
 const SETTINGS_BACKUP_KEY = "st-im-bridge.global-settings.backup.v1";
 const PRESET_PANEL_ROOT_ID = "th-orb-prism-v2";
-const RELAY_VERSION = "1.2.1";
+const RELAY_VERSION = "1.2.2";
 const POLL_WAIT_MS = 25_000;
 const RETRY_DELAY_MS = 3_000;
 const GENERATION_IDLE_WAIT_MS = 300_000;
@@ -214,7 +214,12 @@ async function ensurePresetPanelLoaded(root) {
   const wasOpen = panel.classList.contains("pv2-open");
   if (!panel.querySelector("[data-nav] .pv2-gcard[data-g]")) {
     for (let attempt = 0; attempt < 3 && !panel.classList.contains("pv2-open"); attempt += 1) {
-      orb.click();
+      orb.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }));
       await delay(80);
     }
     try {
