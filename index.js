@@ -165,10 +165,11 @@ function buildWebRelaySection() {
       connecting: "连接中",
       online: "在线",
       generating: "正在生成",
+      configuring: "正在切换全局设置",
       error: "连接异常",
     };
     status.textContent = labelByPhase[relay.phase] || relay.phase;
-    status.className = `imb-status ${relay.phase === "online" || relay.phase === "generating" ? "running" : relay.phase === "error" ? "error" : "stopped"}`;
+    status.className = `imb-status ${["online", "generating", "configuring"].includes(relay.phase) ? "running" : relay.phase === "error" ? "error" : "stopped"}`;
     toggle.textContent = relay.enabled ? "停用此浏览器的网页中继" : "在此浏览器启用网页中继";
     detail.textContent = relay.lastError
       ? `最近错误：${relay.lastError}`

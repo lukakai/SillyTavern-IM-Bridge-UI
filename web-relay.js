@@ -1,10 +1,13 @@
 import { getContext } from "../../../extensions.js";
+import { getPresetManager } from "../../../preset-manager.js";
+import { SlashCommandParser } from "../../../slash-commands/SlashCommandParser.js";
 import { worldInfoCache } from "../../../world-info.js";
 
 const PLUGIN_BASE = "/api/plugins/st-im-bridge";
 const ENABLED_KEY = "st-im-bridge.web-relay.enabled";
 const WORKER_KEY = "st-im-bridge.web-relay.worker-id";
-const RELAY_VERSION = "1.0.1";
+const SETTINGS_BACKUP_KEY = "st-im-bridge.global-settings.backup.v1";
+const RELAY_VERSION = "1.1.0";
 const POLL_WAIT_MS = 25_000;
 const RETRY_DELAY_MS = 3_000;
 const GENERATION_IDLE_WAIT_MS = 300_000;
@@ -146,6 +149,267 @@ function generationBusy() {
   return style.display !== "none" && style.visibility !== "hidden";
 }
 
+function slashCommand(name) {
+  const command = SlashCommandParser.commands?.[name];
+  if (!command || typeof command.callback !== "function") {
+    throw new Error(`酒馆前端命令 /${name} 尚未就绪`);
+  }
+  return command;
+}
+
+async function runSlashCommand(name, args = {}, value = "") {
+  return slashCommand(name).callback(args, value);
+}
+
+function parseStringList(value) {
+  if (Array.isArray(value)) return value.map(String).map(item => item.trim()).filter(Boolean);
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(String).map(item => item.trim()).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readSettingsBackup() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SETTINGS_BACKUP_KEY) || "null");
+    if (!parsed || parsed.version !== 1 || !parsed.state || typeof parsed.state !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function readPromptStates(identifiers) {
+  if (identifiers.length === 0) return new Map();
+  const result = await runSlashCommand("getpromptentry", { identifier: identifiers, return: "dict" });
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("酒馆前端未能读取当前预设选项状态");
+  }
+  return new Map(Object.entries(result).filter(([, enabled]) => typeof enabled === "boolean"));
+}
+
+async function settingsSnapshot() {
+  await ensureAppReady();
+  const context = getContext();
+  const presetManager = getPresetManager();
+  if (!presetManager) throw new Error("酒馆聊天预设管理器尚未就绪");
+
+  const profiles = parseStringList(await runSlashCommand("profile-list"));
+  const currentProfileValue = String(await runSlashCommand("profile") ?? "").trim();
+  const currentProfile = currentProfileValue && currentProfileValue !== "<None>" ? currentProfileValue : null;
+  const presets = presetManager.getAllPresets().map(String).map(name => name.trim()).filter(Boolean);
+  const currentPreset = String(await runSlashCommand("preset") ?? "").trim() || null;
+  const currentModel = String(await runSlashCommand("model", { quiet: "true" }) ?? "").trim() || null;
+  const settings = context.chatCompletionSettings ?? {};
+  const promptsById = new Map(
+    (Array.isArray(settings.prompts) ? settings.prompts : [])
+      .map(prompt => [String(prompt?.identifier ?? "").trim(), prompt])
+      .filter(([identifier]) => Boolean(identifier)),
+  );
+  const orderedIds = [];
+  const seenIds = new Set();
+  for (const container of Array.isArray(settings.prompt_order) ? settings.prompt_order : []) {
+    for (const entry of Array.isArray(container?.order) ? container.order : []) {
+      const identifier = String(entry?.identifier ?? "").trim();
+      if (identifier && !seenIds.has(identifier)) {
+        seenIds.add(identifier);
+        orderedIds.push(identifier);
+      }
+    }
+  }
+  for (const identifier of promptsById.keys()) {
+    if (!seenIds.has(identifier)) {
+      seenIds.add(identifier);
+      orderedIds.push(identifier);
+    }
+  }
+  const states = await readPromptStates(orderedIds);
+  const prompts = orderedIds.flatMap(identifier => {
+    const prompt = promptsById.get(identifier);
+    const name = String(prompt?.name ?? "").trim();
+    const enabled = states.get(identifier);
+    if (!prompt || !name || typeof enabled !== "boolean") return [];
+    const empty = !String(prompt.content ?? "").trim();
+    return [{
+      identifier,
+      name,
+      enabled,
+      toggleable: prompt.marker !== true && !empty,
+      empty,
+    }];
+  });
+  const backup = readSettingsBackup();
+  return {
+    currentProfile,
+    profiles,
+    currentPreset,
+    presets,
+    currentModel,
+    prompts,
+    undoAvailable: Boolean(backup),
+    undoSavedAt: backup?.savedAt ?? null,
+  };
+}
+
+function restorableState(snapshot) {
+  return {
+    currentProfile: snapshot.currentProfile,
+    currentPreset: snapshot.currentPreset,
+    currentModel: snapshot.currentModel,
+    promptStates: Object.fromEntries(snapshot.prompts.map(prompt => [prompt.identifier, prompt.enabled])),
+  };
+}
+
+function saveSettingsBackup(snapshot) {
+  const backup = {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    state: restorableState(snapshot),
+  };
+  localStorage.setItem(SETTINGS_BACKUP_KEY, JSON.stringify(backup));
+  return backup;
+}
+
+async function mutateSettings(action) {
+  const before = await settingsSnapshot();
+  let checkpointed = false;
+  const checkpoint = () => {
+    if (checkpointed) return;
+    saveSettingsBackup(before);
+    checkpointed = true;
+  };
+  await action(before, checkpoint);
+  if (!checkpointed) throw new Error("全局设置操作没有建立撤销快照，已拒绝完成");
+  await delay(800);
+  return settingsSnapshot();
+}
+
+async function selectGlobalProfile(name) {
+  return mutateSettings(async (before, checkpoint) => {
+    if (!before.profiles.includes(name)) throw new Error(`连接配置不存在：${name}`);
+    if (!before.currentProfile) {
+      throw new Error("当前连接设置未绑定保存配置。为确保可以完整撤销，请先在酒馆 Connection Manager 中保存并选中当前配置");
+    }
+    checkpoint();
+    const applied = String(await runSlashCommand("profile", { await: "true", timeout: "15000" }, name) ?? "").trim();
+    if (applied !== name) throw new Error(`连接配置切换失败：${name}`);
+  });
+}
+
+async function selectGlobalPreset(name) {
+  return mutateSettings(async (before, checkpoint) => {
+    if (!before.presets.includes(name)) throw new Error(`聊天预设不存在：${name}`);
+    checkpoint();
+    const applied = String(await runSlashCommand("preset", {}, name) ?? "").trim();
+    if (applied !== name) throw new Error(`聊天预设切换失败：${name}`);
+  });
+}
+
+async function selectGlobalModel(name) {
+  return mutateSettings(async (_before, checkpoint) => {
+    if (!name) throw new Error("模型名称不能为空");
+    checkpoint();
+    const applied = String(await runSlashCommand("model", { quiet: "true" }, name) ?? "").trim();
+    if (!applied || applied.toLocaleLowerCase() !== name.toLocaleLowerCase()) {
+      throw new Error(`模型切换失败或当前 API 不支持该模型：${name}`);
+    }
+  });
+}
+
+async function setGlobalPromptEntries(identifiers, enabled) {
+  const result = await mutateSettings(async (before, checkpoint) => {
+    const requested = [...new Set((Array.isArray(identifiers) ? identifiers : []).map(String).map(value => value.trim()).filter(Boolean))];
+    const allowed = new Set(before.prompts.filter(prompt => prompt.toggleable).map(prompt => prompt.identifier));
+    if (requested.length === 0 || requested.length > 500 || requested.some(identifier => !allowed.has(identifier))) {
+      throw new Error("预设选项已经变化，请重新打开 /preset 后再试");
+    }
+    checkpoint();
+    await runSlashCommand("setpromptentry", { identifier: requested }, enabled ? "on" : "off");
+  });
+  const states = new Map(result.prompts.map(prompt => [prompt.identifier, prompt.enabled]));
+  const requested = [...new Set((Array.isArray(identifiers) ? identifiers : []).map(String).map(value => value.trim()).filter(Boolean))];
+  if (requested.some(identifier => states.get(identifier) !== enabled)) {
+    throw new Error("部分预设选项未成功保存，可使用 /settingsundo 恢复修改前状态");
+  }
+  return result;
+}
+
+async function restoreSettingsBackup() {
+  const backup = readSettingsBackup();
+  if (!backup) throw new Error("当前没有可撤销的全局设置修改");
+  const current = await settingsSnapshot();
+  const state = backup.state;
+
+  if (state.currentProfile !== current.currentProfile) {
+    if (state.currentProfile) {
+      const profiles = parseStringList(await runSlashCommand("profile-list"));
+      if (!profiles.includes(state.currentProfile)) throw new Error(`备份中的连接配置已不存在：${state.currentProfile}`);
+      const applied = String(await runSlashCommand("profile", { await: "true", timeout: "15000" }, state.currentProfile) ?? "").trim();
+      if (applied !== state.currentProfile) throw new Error(`无法恢复备份连接配置：${state.currentProfile}`);
+    } else {
+      const applied = String(await runSlashCommand("profile", { await: "true", timeout: "15000" }, "<None>") ?? "").trim();
+      if (applied !== "<None>") throw new Error("无法恢复未选择连接配置的状态");
+    }
+  }
+
+  const afterProfile = await settingsSnapshot();
+  if (state.currentPreset && state.currentPreset !== afterProfile.currentPreset) {
+    if (!afterProfile.presets.includes(state.currentPreset)) throw new Error(`备份中的聊天预设已不存在：${state.currentPreset}`);
+    const applied = String(await runSlashCommand("preset", {}, state.currentPreset) ?? "").trim();
+    if (applied !== state.currentPreset) throw new Error(`无法恢复备份聊天预设：${state.currentPreset}`);
+  }
+  const afterPreset = await settingsSnapshot();
+  if (state.currentModel && state.currentModel.toLocaleLowerCase() !== afterPreset.currentModel?.toLocaleLowerCase()) {
+    const applied = String(await runSlashCommand("model", { quiet: "true" }, state.currentModel) ?? "").trim();
+    if (applied.toLocaleLowerCase() !== state.currentModel.toLocaleLowerCase()) throw new Error(`无法恢复备份模型：${state.currentModel}`);
+  }
+
+  const available = new Set((await settingsSnapshot()).prompts.map(prompt => prompt.identifier));
+  const entries = Object.entries(state.promptStates ?? {}).filter(([identifier, value]) => available.has(identifier) && typeof value === "boolean");
+  const enabledIds = entries.filter(([, value]) => value).map(([identifier]) => identifier);
+  const disabledIds = entries.filter(([, value]) => !value).map(([identifier]) => identifier);
+  if (enabledIds.length > 0) await runSlashCommand("setpromptentry", { identifier: enabledIds }, "on");
+  if (disabledIds.length > 0) await runSlashCommand("setpromptentry", { identifier: disabledIds }, "off");
+  await delay(800);
+
+  const restored = await settingsSnapshot();
+  if (restored.currentProfile !== (state.currentProfile ?? null)
+    || (state.currentPreset && restored.currentPreset !== state.currentPreset)
+    || (state.currentModel && restored.currentModel?.toLocaleLowerCase() !== state.currentModel.toLocaleLowerCase())) {
+    throw new Error("全局设置未能完整恢复，撤销快照已保留，可修正酒馆配置后重试");
+  }
+  const restoredStates = new Map(restored.prompts.map(prompt => [prompt.identifier, prompt.enabled]));
+  if (entries.some(([identifier, enabled]) => restoredStates.get(identifier) !== enabled)) {
+    throw new Error("部分预设选项未能恢复，撤销快照已保留，可修正预设后重试");
+  }
+  saveSettingsBackup(current);
+  return settingsSnapshot();
+}
+
+async function executeSettingsJob(job) {
+  if (generationBusy()) throw new Error("酒馆网页正在生成，请结束后再打开或修改全局设置");
+  const payload = job.controlPayload ?? {};
+  switch (job.operation) {
+    case "settings_snapshot":
+      return settingsSnapshot();
+    case "settings_select_profile":
+      return selectGlobalProfile(String(payload.name ?? "").trim());
+    case "settings_select_preset":
+      return selectGlobalPreset(String(payload.name ?? "").trim());
+    case "settings_select_model":
+      return selectGlobalModel(String(payload.name ?? "").trim());
+    case "settings_set_prompt_entries":
+      return setGlobalPromptEntries(payload.identifiers, payload.enabled === true);
+    case "settings_undo":
+      return restoreSettingsBackup();
+    default:
+      throw new Error(`不支持的酒馆全局设置操作：${job.operation}`);
+  }
+}
+
 async function waitUntil(predicate, timeoutMs, message) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -237,12 +501,22 @@ function latestAssistant(context) {
 async function executeJob(job) {
   let heartbeatTimer = null;
   activeJobId = job.id;
-  notify({ phase: "generating", activeJobId: job.id, lastError: null });
+  const generationJob = job.operation === "send" || job.operation === "regenerate";
+  notify({ phase: generationJob ? "generating" : "configuring", activeJobId: job.id, lastError: null });
   const sendHeartbeat = () => relayApi("/web-relay/heartbeat", identity({ activeJobId: job.id }))
     .catch((error) => console.warn("[IM Bridge Relay] heartbeat during generation failed", error));
   heartbeatTimer = setInterval(sendHeartbeat, 10_000);
 
   try {
+    if (!generationJob) {
+      const result = await executeSettingsJob(job);
+      await relayApi(`/web-relay/jobs/${encodeURIComponent(job.id)}/complete`, {
+        ...identity(),
+        result,
+      });
+      notify({ phase: "online", lastSeenAt: new Date().toISOString(), lastError: null });
+      return;
+    }
     const context = await ensureTarget(job);
     // World books can be edited from Telegram while this dedicated tab is
     // idle. Force the native prompt pipeline to fetch the latest saved data.
