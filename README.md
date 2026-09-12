@@ -22,7 +22,7 @@ SillyTavern UI 扩展，作为 [SillyTavern-IM-Bridge](https://github.com/lukaka
 - **压缩配置**：调整 keepRecent / batchSize / timeoutMs / retryCount / retryDelayMs。
 - **管理员视图**（admin 用户可见）：跨账号查看与启停他人 bot。
 - **网页完整模式中继**：在当前浏览器中显式启用后，领取 Telegram 生成任务，切换到指定角色/会话并调用 SillyTavern 原生 `Generate()`。世界书、预设、Persona、Regex 和生成拦截器等均由网页前端按正常流程运行。
-- **酒馆全局设置中继**：执行 Telegram `/api`、`/preset`、`/model` 和 `/settingsundo` 请求，复用 SillyTavern 官方前端命令，因此结果与网页全局设置一致并对所有聊天生效。只向 Telegram 返回配置名称、预设名、模型名和 prompt 开关，不返回 API 地址、密钥或 Secret ID。
+- **酒馆全局设置中继**：执行 Telegram `/api`、`/preset`、`/model` 和 `/settingsundo` 请求，复用 SillyTavern 官方前端命令；对于“双人成行”这类带网页控制面板的预设，还会同步面板顶部模型方案与当前分类布局。结果与网页全局设置一致并对所有聊天生效，只向 Telegram 返回配置名称、预设名、模型名和 prompt 开关，不返回 API 地址、密钥或 Secret ID。
 
 ## 网页完整模式
 
@@ -35,7 +35,7 @@ SillyTavern UI 扩展，作为 [SillyTavern-IM-Bridge](https://github.com/lukaka
 
 每次领取生成任务后，中继会清空 SillyTavern 前端的世界书读取缓存。这样通过 Telegram `/worldbook` 保存的独立世界书内容会在下一次原生生成时重新读取，无需手动刷新页面。
 
-全局设置任务只在页面空闲时执行；网页正在生成时会直接拒绝。每次修改前会在当前专用浏览器 profile 的 `localStorage` 保存一层完整状态（当前连接配置、预设、模型及 prompt 开关），供 `/settingsundo` 恢复。快照只保存在该 profile，不上传 GitHub，也不会经 Telegram 传输。连接设置当前没有绑定已保存 Connection Manager 配置时，为保证能完整恢复，中继会拒绝从 Telegram 切换连接配置。
+全局设置任务只在页面空闲时执行；网页正在生成时会直接拒绝。每次修改前会在当前专用浏览器 profile 的 `localStorage` 保存一层完整状态（当前连接配置、预设、预设内模型方案、酒馆模型及 prompt 开关），供 `/settingsundo` 恢复。快照只保存在该 profile，不上传 GitHub，也不会经 Telegram 传输。连接设置当前没有绑定已保存 Connection Manager 配置时，为保证能完整恢复，中继会拒绝从 Telegram 切换连接配置。
 
 中继只访问同源 `/api/plugins/st-im-bridge/web-relay/*` 路由，复用 SillyTavern 登录态与 CSRF Token，不保存 Telegram Token、Basic Auth 密码或模型密钥。
 

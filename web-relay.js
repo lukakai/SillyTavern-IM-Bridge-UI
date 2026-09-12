@@ -7,7 +7,8 @@ const PLUGIN_BASE = "/api/plugins/st-im-bridge";
 const ENABLED_KEY = "st-im-bridge.web-relay.enabled";
 const WORKER_KEY = "st-im-bridge.web-relay.worker-id";
 const SETTINGS_BACKUP_KEY = "st-im-bridge.global-settings.backup.v1";
-const RELAY_VERSION = "1.1.0";
+const PRESET_PANEL_ROOT_ID = "th-orb-prism-v2";
+const RELAY_VERSION = "1.2.0";
 const POLL_WAIT_MS = 25_000;
 const RETRY_DELAY_MS = 3_000;
 const GENERATION_IDLE_WAIT_MS = 300_000;
@@ -191,6 +192,118 @@ async function readPromptStates(identifiers) {
   return new Map(Object.entries(result).filter(([, enabled]) => typeof enabled === "boolean"));
 }
 
+function presetPanelRoot() {
+  return document.getElementById(PRESET_PANEL_ROOT_ID);
+}
+
+function presetPanelProfiles(root = presetPanelRoot()) {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll('.pv2-seg button[data-model]')).flatMap((button) => {
+    const id = String(button.dataset.model ?? "").trim();
+    const label = String(button.textContent ?? "").trim();
+    if (!id || !label) return [];
+    return [{ id, label, active: button.getAttribute("aria-pressed") === "true" }];
+  });
+}
+
+async function ensurePresetPanelLoaded(root) {
+  const panel = root?.querySelector(".pv2-panel");
+  const orb = root?.querySelector(".pv2-orb");
+  if (!panel || !orb) return null;
+  const wasOpen = panel.classList.contains("pv2-open");
+  if (!panel.querySelector("[data-nav] .pv2-gcard[data-g]")) {
+    for (let attempt = 0; attempt < 3 && !panel.classList.contains("pv2-open"); attempt += 1) {
+      orb.click();
+      await delay(80);
+    }
+    try {
+      await waitUntil(
+        () => Boolean(panel.querySelector("[data-nav] .pv2-gcard[data-g]")),
+        15_000,
+        "预设悬浮窗未能加载分类",
+      );
+    } catch (error) {
+      console.warn("[IM Bridge Relay] preset panel categories unavailable", error);
+    }
+  }
+  return { panel, wasOpen };
+}
+
+function presetPanelZone(card) {
+  for (let node = card?.previousElementSibling; node; node = node.previousElementSibling) {
+    if (node.classList?.contains("pv2-zh")) return String(node.textContent ?? "").trim() || "预设选项";
+  }
+  return "预设选项";
+}
+
+async function readPresetPanelExtras(prompts) {
+  const root = presetPanelRoot();
+  if (!root || presetPanelProfiles(root).length === 0) {
+    return { presetProfiles: [], promptLayout: [] };
+  }
+  const ready = await ensurePresetPanelLoaded(root);
+  const presetProfiles = presetPanelProfiles(root);
+  if (!ready) return { presetProfiles, promptLayout: [] };
+  const { panel, wasOpen } = ready;
+  const nav = panel.querySelector("[data-nav]");
+  const validIdentifiers = new Set(prompts.map(prompt => prompt.identifier));
+  const categoryMetadata = Array.from(nav?.querySelectorAll(".pv2-gcard[data-g]") ?? []).map(card => ({
+    index: Number(card.dataset.g),
+    name: String(card.querySelector(".pv2-gnm")?.textContent ?? "").trim(),
+    zone: presetPanelZone(card),
+  })).filter(category => Number.isInteger(category.index) && category.name);
+  const categories = [];
+
+  for (const category of categoryMetadata) {
+    const button = nav?.querySelector(`.pv2-gcard[data-g="${category.index}"]`);
+    if (!button) continue;
+    if (button.getAttribute("aria-expanded") !== "true") {
+      button.click();
+      await delay(0);
+    }
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const closedSubgroup = nav?.querySelector('[data-expand] .pv2-subhead[aria-expanded="false"]');
+      if (!closedSubgroup) break;
+      closedSubgroup.click();
+      await delay(0);
+    }
+    const identifiers = [...new Set(Array.from(nav?.querySelectorAll("[data-expand] [data-rk]") ?? [])
+      .map(element => String(element.dataset.rk ?? "").trim())
+      .filter(identifier => identifier && validIdentifiers.has(identifier)))];
+    if (identifiers.length > 0) categories.push({ ...category, identifiers });
+  }
+
+  if (!wasOpen && panel.classList.contains("pv2-open")) {
+    panel.querySelector("[data-close]")?.click();
+  }
+  const sections = [];
+  for (const category of categories) {
+    let section = sections.find(item => item.name === category.zone);
+    if (!section) {
+      section = { name: category.zone, groups: [] };
+      sections.push(section);
+    }
+    section.groups.push({ name: category.name, identifiers: category.identifiers });
+  }
+  return { presetProfiles: presetPanelProfiles(root), promptLayout: sections };
+}
+
+async function applyPresetPanelProfile(name) {
+  const root = presetPanelRoot();
+  const profile = presetPanelProfiles(root).find(item => item.id === name);
+  const button = root?.querySelector(`.pv2-seg button[data-model="${CSS.escape(name)}"]`);
+  const status = root?.querySelector("[data-sync]");
+  if (!profile || !button || !status) throw new Error(`当前预设不支持模型方案：${name}`);
+  button.click();
+  await waitUntil(() => {
+    const current = presetPanelProfiles(root).find(item => item.active);
+    return current?.id === name && String(status.textContent ?? "").trim() !== "正在切换";
+  }, 60_000, `预设内模型方案切换超时：${profile.label}`);
+  if (String(status.textContent ?? "").trim() !== "已同步") {
+    throw new Error(`预设内模型方案未完全同步：${profile.label}`);
+  }
+}
+
 async function settingsSnapshot() {
   await ensureAppReady();
   const context = getContext();
@@ -241,6 +354,7 @@ async function settingsSnapshot() {
       empty,
     }];
   });
+  const presetPanel = await readPresetPanelExtras(prompts);
   const backup = readSettingsBackup();
   return {
     currentProfile,
@@ -249,6 +363,8 @@ async function settingsSnapshot() {
     presets,
     currentModel,
     prompts,
+    presetProfiles: presetPanel.presetProfiles,
+    promptLayout: presetPanel.promptLayout,
     undoAvailable: Boolean(backup),
     undoSavedAt: backup?.savedAt ?? null,
   };
@@ -259,6 +375,7 @@ function restorableState(snapshot) {
     currentProfile: snapshot.currentProfile,
     currentPreset: snapshot.currentPreset,
     currentModel: snapshot.currentModel,
+    currentPresetProfile: snapshot.presetProfiles.find(profile => profile.active)?.id ?? null,
     promptStates: Object.fromEntries(snapshot.prompts.map(prompt => [prompt.identifier, prompt.enabled])),
   };
 }
@@ -305,6 +422,16 @@ async function selectGlobalPreset(name) {
     checkpoint();
     const applied = String(await runSlashCommand("preset", {}, name) ?? "").trim();
     if (applied !== name) throw new Error(`聊天预设切换失败：${name}`);
+  });
+}
+
+async function selectGlobalPresetProfile(name) {
+  return mutateSettings(async (before, checkpoint) => {
+    if (!before.presetProfiles.some(profile => profile.id === name)) {
+      throw new Error(`当前预设不支持模型方案：${name}`);
+    }
+    checkpoint();
+    await applyPresetPanelProfile(name);
   });
 }
 
@@ -362,12 +489,20 @@ async function restoreSettingsBackup() {
     if (applied !== state.currentPreset) throw new Error(`无法恢复备份聊天预设：${state.currentPreset}`);
   }
   const afterPreset = await settingsSnapshot();
-  if (state.currentModel && state.currentModel.toLocaleLowerCase() !== afterPreset.currentModel?.toLocaleLowerCase()) {
+  if (state.currentPresetProfile
+    && state.currentPresetProfile !== afterPreset.presetProfiles.find(profile => profile.active)?.id) {
+    if (!afterPreset.presetProfiles.some(profile => profile.id === state.currentPresetProfile)) {
+      throw new Error(`备份中的预设内模型方案已不存在：${state.currentPresetProfile}`);
+    }
+    await applyPresetPanelProfile(state.currentPresetProfile);
+  }
+  const afterPresetProfile = await settingsSnapshot();
+  if (state.currentModel && state.currentModel.toLocaleLowerCase() !== afterPresetProfile.currentModel?.toLocaleLowerCase()) {
     const applied = String(await runSlashCommand("model", { quiet: "true" }, state.currentModel) ?? "").trim();
     if (applied.toLocaleLowerCase() !== state.currentModel.toLocaleLowerCase()) throw new Error(`无法恢复备份模型：${state.currentModel}`);
   }
 
-  const available = new Set((await settingsSnapshot()).prompts.map(prompt => prompt.identifier));
+  const available = new Set(afterPresetProfile.prompts.map(prompt => prompt.identifier));
   const entries = Object.entries(state.promptStates ?? {}).filter(([identifier, value]) => available.has(identifier) && typeof value === "boolean");
   const enabledIds = entries.filter(([, value]) => value).map(([identifier]) => identifier);
   const disabledIds = entries.filter(([, value]) => !value).map(([identifier]) => identifier);
@@ -378,6 +513,8 @@ async function restoreSettingsBackup() {
   const restored = await settingsSnapshot();
   if (restored.currentProfile !== (state.currentProfile ?? null)
     || (state.currentPreset && restored.currentPreset !== state.currentPreset)
+    || (state.currentPresetProfile
+      && restored.presetProfiles.find(profile => profile.active)?.id !== state.currentPresetProfile)
     || (state.currentModel && restored.currentModel?.toLocaleLowerCase() !== state.currentModel.toLocaleLowerCase())) {
     throw new Error("全局设置未能完整恢复，撤销快照已保留，可修正酒馆配置后重试");
   }
@@ -399,6 +536,8 @@ async function executeSettingsJob(job) {
       return selectGlobalProfile(String(payload.name ?? "").trim());
     case "settings_select_preset":
       return selectGlobalPreset(String(payload.name ?? "").trim());
+    case "settings_select_preset_profile":
+      return selectGlobalPresetProfile(String(payload.name ?? "").trim());
     case "settings_select_model":
       return selectGlobalModel(String(payload.name ?? "").trim());
     case "settings_set_prompt_entries":
