@@ -1,9 +1,10 @@
 import { getContext } from "../../../extensions.js";
+import { worldInfoCache } from "../../../world-info.js";
 
 const PLUGIN_BASE = "/api/plugins/st-im-bridge";
 const ENABLED_KEY = "st-im-bridge.web-relay.enabled";
 const WORKER_KEY = "st-im-bridge.web-relay.worker-id";
-const RELAY_VERSION = "1.0.0";
+const RELAY_VERSION = "1.0.1";
 const POLL_WAIT_MS = 25_000;
 const RETRY_DELAY_MS = 3_000;
 const GENERATION_IDLE_WAIT_MS = 300_000;
@@ -243,6 +244,9 @@ async function executeJob(job) {
 
   try {
     const context = await ensureTarget(job);
+    // World books can be edited from Telegram while this dedicated tab is
+    // idle. Force the native prompt pipeline to fetch the latest saved data.
+    worldInfoCache.clear();
     const restoreModel = applyTemporaryModelOverride(context, job.modelOverride);
     try {
       if (job.operation === "send") {

@@ -32,6 +32,8 @@ SillyTavern UI 扩展，作为 [SillyTavern-IM-Bridge](https://github.com/lukaka
 
 启用状态保存在这个浏览器 profile 的 `localStorage`，不会同步到其他浏览器。同一 profile 打开多个标签页时使用 Web Locks 只允许一个标签页执行任务。中继会自动切换当前角色和会话，所以不要在日常使用的浏览器配置中启用。首次配置应使用可见窗口完成登录；之后可以复用同一 profile 启动 headless Chromium。
 
+每次领取生成任务后，中继会清空 SillyTavern 前端的世界书读取缓存。这样通过 Telegram `/worldbook` 保存的独立世界书内容会在下一次原生生成时重新读取，无需手动刷新页面。
+
 中继只访问同源 `/api/plugins/st-im-bridge/web-relay/*` 路由，复用 SillyTavern 登录态与 CSRF Token，不保存 Telegram Token、Basic Auth 密码或模型密钥。
 
 ### Mac mini 无头运行
