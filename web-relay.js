@@ -8,7 +8,7 @@ const ENABLED_KEY = "st-im-bridge.web-relay.enabled";
 const WORKER_KEY = "st-im-bridge.web-relay.worker-id";
 const SETTINGS_BACKUP_KEY = "st-im-bridge.global-settings.backup.v1";
 const PRESET_PANEL_ROOT_ID = "th-orb-prism-v2";
-const RELAY_VERSION = "1.2.0";
+const RELAY_VERSION = "1.2.1";
 const POLL_WAIT_MS = 25_000;
 const RETRY_DELAY_MS = 3_000;
 const GENERATION_IDLE_WAIT_MS = 300_000;
@@ -17,6 +17,7 @@ let csrfTokenCache = null;
 let loopController = null;
 let loopPromise = null;
 let activeJobId = null;
+let presetPanelLayoutCache = null;
 const listeners = new Set();
 
 const state = {
@@ -236,10 +237,18 @@ function presetPanelZone(card) {
   return "预设选项";
 }
 
-async function readPresetPanelExtras(prompts) {
+async function readPresetPanelExtras(prompts, currentPreset) {
   const root = presetPanelRoot();
   if (!root || presetPanelProfiles(root).length === 0) {
+    presetPanelLayoutCache = null;
     return { presetProfiles: [], promptLayout: [] };
+  }
+  const identifiersKey = prompts.map(prompt => prompt.identifier).join("\n");
+  if (presetPanelLayoutCache
+    && presetPanelLayoutCache.currentPreset === currentPreset
+    && presetPanelLayoutCache.identifiersKey === identifiersKey
+    && Date.now() - presetPanelLayoutCache.savedAt < 30_000) {
+    return { presetProfiles: presetPanelProfiles(root), promptLayout: presetPanelLayoutCache.promptLayout };
   }
   const ready = await ensurePresetPanelLoaded(root);
   const presetProfiles = presetPanelProfiles(root);
@@ -285,13 +294,20 @@ async function readPresetPanelExtras(prompts) {
     }
     section.groups.push({ name: category.name, identifiers: category.identifiers });
   }
+  presetPanelLayoutCache = {
+    currentPreset,
+    identifiersKey,
+    promptLayout: sections,
+    savedAt: Date.now(),
+  };
   return { presetProfiles: presetPanelProfiles(root), promptLayout: sections };
 }
 
 async function applyPresetPanelProfile(name) {
   const root = presetPanelRoot();
   const profile = presetPanelProfiles(root).find(item => item.id === name);
-  const button = root?.querySelector(`.pv2-seg button[data-model="${CSS.escape(name)}"]`);
+  const button = Array.from(root?.querySelectorAll('.pv2-seg button[data-model]') ?? [])
+    .find(item => String(item.dataset.model ?? "").trim() === name);
   const status = root?.querySelector("[data-sync]");
   if (!profile || !button || !status) throw new Error(`当前预设不支持模型方案：${name}`);
   button.click();
@@ -302,6 +318,7 @@ async function applyPresetPanelProfile(name) {
   if (String(status.textContent ?? "").trim() !== "已同步") {
     throw new Error(`预设内模型方案未完全同步：${profile.label}`);
   }
+  presetPanelLayoutCache = null;
 }
 
 async function settingsSnapshot() {
@@ -354,7 +371,7 @@ async function settingsSnapshot() {
       empty,
     }];
   });
-  const presetPanel = await readPresetPanelExtras(prompts);
+  const presetPanel = await readPresetPanelExtras(prompts, currentPreset);
   const backup = readSettingsBackup();
   return {
     currentProfile,
@@ -422,6 +439,7 @@ async function selectGlobalPreset(name) {
     checkpoint();
     const applied = String(await runSlashCommand("preset", {}, name) ?? "").trim();
     if (applied !== name) throw new Error(`聊天预设切换失败：${name}`);
+    presetPanelLayoutCache = null;
   });
 }
 
