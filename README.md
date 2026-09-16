@@ -75,6 +75,7 @@ security add-generic-password -U \
 
 ```sh
 cd relay-runner
+node configure-controller.mjs config.json
 node install-controller.mjs config.json
 ```
 
