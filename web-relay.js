@@ -8,7 +8,7 @@ const ENABLED_KEY = "st-im-bridge.web-relay.enabled";
 const WORKER_KEY = "st-im-bridge.web-relay.worker-id";
 const SETTINGS_BACKUP_KEY = "st-im-bridge.global-settings.backup.v1";
 const PRESET_PANEL_ROOT_ID = "th-orb-prism-v2";
-const RELAY_VERSION = "1.2.2";
+const RELAY_VERSION = "1.3.0";
 const POLL_WAIT_MS = 25_000;
 const RETRY_DELAY_MS = 3_000;
 const GENERATION_IDLE_WAIT_MS = 300_000;
@@ -17,6 +17,8 @@ let csrfTokenCache = null;
 let loopController = null;
 let loopPromise = null;
 let activeJobId = null;
+const pageInstanceId = createWorkerId();
+let reloadRequested = false;
 let presetPanelLayoutCache = null;
 const listeners = new Set();
 
@@ -126,6 +128,7 @@ function identity(extra = {}) {
     workerId: workerId(),
     relayVersion: RELAY_VERSION,
     pageUrl: pageUrl(),
+    pageInstanceId,
     ...extra,
   };
 }
@@ -670,6 +673,13 @@ async function executeJob(job) {
   heartbeatTimer = setInterval(sendHeartbeat, 10_000);
 
   try {
+    if (job.operation === "relay_refresh") {
+      await relayApi(`/web-relay/jobs/${encodeURIComponent(job.id)}/complete`, identity());
+      reloadRequested = true;
+      notify({ phase: "reconnecting", lastError: null });
+      setTimeout(() => window.location.reload(), 0);
+      return;
+    }
     if (!generationJob) {
       const result = await executeSettingsJob(job);
       await relayApi(`/web-relay/jobs/${encodeURIComponent(job.id)}/complete`, {
@@ -746,7 +756,12 @@ async function runWorker(signal) {
       const heartbeat = await relayApi("/web-relay/heartbeat", identity({ activeJobId }), signal);
       notify({ phase: "online", lastSeenAt: heartbeat?.lastSeenAt ?? new Date().toISOString(), lastError: null });
       const result = await relayApi("/web-relay/poll", identity({ waitMs: POLL_WAIT_MS }), signal);
-      if (result?.job) await executeJob(result.job);
+      if (result?.job) {
+        await executeJob(result.job);
+        // A refresh job has acknowledged safely; let the browser reload before
+        // this document can claim another generation job.
+        if (reloadRequested) return;
+      }
     } catch (error) {
       if (signal.aborted || abortError(error)) break;
       const message = error instanceof Error ? error.message : String(error);

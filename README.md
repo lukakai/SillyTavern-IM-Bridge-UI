@@ -58,6 +58,36 @@ node runner.mjs config.json
 
 `security` 会安全提示输入密码，不必把密码写入命令历史或 `config.json`。运行器启动独立 Chrome profile，并在页面加载前启用中继。若酒馆还启用了用户账号登录，把 `headless` 暂时改为 `false`，在可见窗口完成一次登录后再切回 `true`。
 
+### Telegram 远程控制无头浏览器
+
+`/relay refresh` 可以直接让已经在线的中继页面刷新。要从 Telegram 启动、停止或重启 Mac mini 上的无头浏览器，还需要在 Mac mini 安装固定动作控制器；它只接受 `start`、`stop`、`restart`、`refresh` 和 `status`，不能执行任意命令。
+
+先在 Mac mini 为控制器写入一个至少 24 位的随机 Token 到钥匙串（此 Token 不要提交到 Git）：
+
+```sh
+security add-generic-password -U \
+  -a 'relay-control' \
+  -s 'SillyTavern IM Bridge Relay Control' \
+  -w
+```
+
+然后在 `relay-runner/config.json` 中保留 `controller` 配置，并安装控制器：
+
+```sh
+cd relay-runner
+node install-controller.mjs config.json
+```
+
+控制器默认监听 `0.0.0.0:38712`，Tower 需要能通过内网访问 Mac mini 的这个端口。将相同 Token 作为 Tower 的 `RELAY_SUPERVISOR_TOKEN`，并设置 `RELAY_SUPERVISOR_URL=http://MAC-MINI-LAN-IP:38712` 后重启 SillyTavern。完成后 Telegram 可用：
+
+```text
+/relay status
+/relay refresh
+/relay start
+/relay stop
+/relay restart
+```
+
 ## 探测与降级
 
 展开「IM Bridge」抽屉时，扩展会先 `GET /api/plugins/st-im-bridge/probe`：
